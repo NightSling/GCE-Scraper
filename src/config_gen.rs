@@ -1,4 +1,4 @@
-use std::{fs::File, io::Write, path::PathBuf, sync::Mutex, vec};
+use std::{fs::File, io::Write, path::PathBuf, vec};
 
 use crate::{
     configuration::{Configuration, YearConfiguration, SYLLABUS_CODES},
@@ -97,9 +97,8 @@ pub fn handle_generate(mut config: GenerationConfig) {
             .collect(),
     };
 
-    // map through f_config.subjects and if years is empty, get all years
-    // make sure to run this in parallel, with a limit of config.threads
-
+    // mapping through f_config.subjects and if years is empty, getting all years
+    // uses tokio runtime with multi-threaded executor
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(config.threads as usize)
         .enable_all()
