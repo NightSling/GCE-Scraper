@@ -4,3 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+clap = { version = "4.5.23", features = ["derive"] }
+clap-verbosity-flag = "3.0.2"
+kuchikiki = "0.8.6-speedreader"
+reqwest = "0.12.9"
+tokio = { version = "1.42.0", features = ["full"] }
+log = "0.4"
+pretty_env_logger = "0.5.0"
+toml = "0.8.19"
+serde = { version = "1.0.216", features = ["derive"] }
+futures = "0.3.31"
