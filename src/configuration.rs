@@ -1,13 +1,11 @@
-use std::{fs::File, io::Read, str::FromStr, sync::LazyLock};
+use std::{fmt::Display, fs::File, io::Read, str::FromStr, sync::LazyLock};
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Configuration {
-    pub download_markscheme: bool,
-    pub download_paper: bool,
-    pub download_examiners_report: bool,
+    pub papers: Vec<PaperType>,
     pub subjects: Vec<YearConfiguration>,
 }
 
@@ -19,9 +17,7 @@ impl TryFrom<File> for Configuration {
         // let buff_lines= std::io::BufRead::lines(buff);
         let mut conf_str: Vec<u8> = Vec::new();
         buff.read_to_end(&mut conf_str).unwrap();
-        let config = toml::from_str(
-            std::str::from_utf8(&conf_str).unwrap(),
-        );
+        let config = toml::from_str(std::str::from_utf8(&conf_str).unwrap());
         let config = match config {
             Ok(config) => config,
             Err(_) => {
@@ -38,21 +34,196 @@ impl TryFrom<File> for Configuration {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct YearConfiguration {
     pub syllabus_code: SyllabusCode,
-    pub years: Vec<String>,
-    pub seasons: Vec<Season>,
+    pub papers: Vec<Paper>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Paper {
+    pub year: String,
+    pub season: Season,
+    pub paper_type: PaperType,
+    pub variant: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum PaperParseError {
+    SeasonParseError(SeasonParseError),
+    PaperTypeParseError(PaperTypeParseError),
+    RegexNoMatch,
+}
+
+impl FromStr for Paper {
+    type Err = PaperParseError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // check if the s matches the regex, (\d+)_([m|s|w])(\d.)_((qp)_(\d+)|(ms)_(\d+)|(er))(.+)?
+        let matcher = regex::Regex::new(r"(\d+)_([m|s|w])(\d.)_((qp)_(\d+)|(in)_(\d+)|(ir)_(\d+)|(ci)_(\d+)|(ms)_(\d+)|(er)|(gt))(.+)?");
+        if matcher.is_err() {
+            return Err(PaperParseError::RegexNoMatch);
+        }
+        let matcher = matcher.unwrap();
+        let captures = matcher.captures(s);
+        if captures.is_none() {
+            return Err(PaperParseError::RegexNoMatch);
+        }
+        let _ = captures.unwrap();
+
+        let parts: Vec<&str> = s.split('_').collect();
+        let season_year = parts[1];
+        let year = season_year[1..].to_string();
+        let year = "20".to_string() + &year;
+        let season = match <Season as std::str::FromStr>::from_str(season_year) {
+            Ok(season) => season,
+            Err(e) => return Err(PaperParseError::SeasonParseError(e)),
+        };
+        
+        let paper_type = match <PaperType as std::str::FromStr>::from_str(s) {
+            Ok(paper_type) => paper_type,
+            Err(e) => return Err(PaperParseError::PaperTypeParseError(e)),
+        };
+        match paper_type {
+            PaperType::ER | PaperType::GT => {
+                Ok(Paper {
+                    year,
+                    season,
+                    paper_type,
+                    variant: "".to_string(),
+                })
+            }
+            _ => {
+                    let mut variant = parts[3].split(".");
+                    // get the first part or "",
+                    let variant = variant.next().unwrap_or("");
+                    Ok(Paper {
+                        year,
+                        season,
+                        paper_type,
+                        variant: variant.to_string(),
+                    })
+                }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RawPaper {
+    pub year: Vec<String>,
+    pub syllabus_code: SyllabusCode,
+}
+impl Paper {
+    pub fn new(year: &str, season: Season, paper_type: PaperType, variant: &str) -> Self {
+        Self {
+            year: year.to_string(),
+            season,
+            paper_type,
+            variant: variant.to_string(),
+        }
+    }
+
+    pub fn get_ref_filename(&self, syllabus_code: &SyllabusCode) -> String {
+        // if examiners report, SYLLABUSCODE_SEASONCHAR.YEAR(LAST_TWO_CODE)_ER.pdf
+        // else, SYLLABUSCODE_SEASONCHAR.PAPERTYPE.VARIANT.pdf
+        let year_format = &self.year[self.year.len() - 2..];
+        match self.paper_type {
+            PaperType::ER => {
+                format!("{}_{}{}_er.pdf", syllabus_code.syllabus_code, self.season, year_format)
+            }
+            _ => {
+                format!(
+                    "{}_{}{}_{}_{}.pdf",
+                    syllabus_code.syllabus_code,
+                    self.season,
+                    year_format,
+                    self.paper_type,
+                    self.variant
+                )
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum Season {
     Winter, // Refered to as "w"
     Summer, // Refered to as "s"
-    March, // Refered to as "m"
+    March,  // Refered to as "m"
 }
 
 #[derive(Debug, Clone)]
 pub enum SeasonParseError {
     InvalidSeasonCharacter,
-    RegexNoMatch
+    RegexNoMatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum PaperType {
+    QP,
+    MS,
+    ER,
+    IN,
+    GT,
+    IR,
+    CI,
+}
+
+#[derive(Debug, Clone)]
+pub enum PaperTypeParseError {
+    InvalidPaperTypeCharacter,
+    RegexNoMatch,
+}
+impl FromStr for PaperType {
+    type Err = PaperTypeParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        // use regex, _qp|_ms|_er
+        let matcher = regex::Regex::new(r"_(qp|ms|er|ci|ir|in|gt)").unwrap();
+        let captures = matcher.captures(value);
+        match captures {
+            Some(captures) => {
+                let paper_type = match captures.get(1) {
+                    Some(paper_type) => paper_type.as_str(),
+                    None => {
+                        debug!("Failed parsing paper type from: {}", value);
+                        return Err(PaperTypeParseError::RegexNoMatch);
+                    }
+                };
+                match paper_type {
+                    "qp" => Ok(PaperType::QP),
+                    "ms" => Ok(PaperType::MS),
+                    "er" => Ok(PaperType::ER),
+                    "in" => Ok(PaperType::IN),
+                    "gt" => Ok(PaperType::GT),
+                    "ir" => Ok(PaperType::IR),
+                    "ci" => Ok(PaperType::CI),
+                    _ => Err(PaperTypeParseError::InvalidPaperTypeCharacter),
+                }
+            }
+            None => Err(PaperTypeParseError::RegexNoMatch),
+        }
+    }
+}
+
+impl Display for PaperType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PaperType::QP => write!(f, "qp"),
+            PaperType::MS => write!(f, "ms"),
+            PaperType::ER => write!(f, "er"),
+            PaperType::IN => write!(f, "in"),
+            PaperType::GT => write!(f, "gt"),
+            PaperType::IR => write!(f, "ir"),
+            PaperType::CI => write!(f, "ci"),
+        }
+    }
+}
+
+impl Display for Season {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Season::Winter => write!(f, "w"),
+            Season::Summer => write!(f, "s"),
+            Season::March => write!(f, "m"),
+        }
+    }
 }
 
 impl FromStr for Season {
@@ -68,9 +239,7 @@ impl FromStr for Season {
                     Some(season) => season.as_str(),
                     None => {
                         debug!("Failed parsing season from: {}", season);
-                        return Err(
-                            SeasonParseError::RegexNoMatch
-                        )
+                        return Err(SeasonParseError::RegexNoMatch);
                     }
                 };
                 match season.chars().next().unwrap() {
@@ -92,7 +261,6 @@ pub struct SyllabusCode {
     pub access_slug: String,
 }
 
-
 impl SyllabusCode {
     pub fn new(name: &str, access_slug: &str, syllabus_code: &str) -> Self {
         Self {
@@ -104,7 +272,7 @@ impl SyllabusCode {
 }
 
 pub static SYLLABUS_CODES: LazyLock<Vec<SyllabusCode>> = LazyLock::new(|| {
-    vec!(
+    vec![
         SyllabusCode::new("Accounting", "accounting-(9706)", "9706"),
         SyllabusCode::new("Afrikaans", "afrikaans-(9679)", "9679"),
         SyllabusCode::new(
@@ -300,5 +468,5 @@ pub static SYLLABUS_CODES: LazyLock<Vec<SyllabusCode>> = LazyLock::new(|| {
             "urdu-pakistan-only-(A-level-only)-(9686)",
             "9686",
         ),
-    )
+    ]
 });

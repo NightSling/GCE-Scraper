@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use gce_scraper::{config_gen::{handle_generate, GenerationConfig, PaperGenerationConfig}, configuration::Season, download::{handle_download, DownloadConfiguration}};
+use gce_scraper::{config_gen::{handle_generate, GenerationConfig, PaperGenerationConfig}, configuration::{PaperType, Season}, download::{handle_download, DownloadConfiguration}};
 use log::debug;
 
 
@@ -30,22 +30,13 @@ enum Subs {
     GenerateConfig {
         #[arg(short, long, value_name = "output", default_value = "config.toml")]
         output: PathBuf,
-        #[arg(short = 'm', long, value_name = "markscheme", default_value_t = true)]
-        download_markscheme: bool,
-        #[arg(short = 'p', long, value_name = "paper", default_value_t = true)]
-        download_paper: bool,
-        #[arg(
-            short = 'e',
-            long,
-            value_name = "examiners-report",
-            default_value_t = false
-        )]
-        download_examiners_report: bool,
-        #[arg(short, long, value_name = "years")]
+        #[arg(short = 'p', long, value_name = "paper", value_delimiter=',', default_value="qp,ms,er")]
+        papers: Vec<PaperType>,
+        #[arg(short, long, value_name = "years", value_delimiter=',')]
         years: Option<Vec<String>>,
-        #[arg(short, long, value_name = "subjects")]
+        #[arg(short, long, value_name = "subjects", value_delimiter=',')]
         subjects: Option<Vec<String>>,
-        #[arg(long, value_name = "seasons", default_value = "winter, summer")]
+        #[arg(long, value_name = "seasons", value_delimiter=',' , default_value = "winter,summer")]
         seasons: Option<Vec<Season>>
     },
 
@@ -90,7 +81,7 @@ fn main() {
             output,
         } => {
             debug!("Selected Download subcommand.");
-            handle_download(match DownloadConfiguration::new(config, output) {
+            handle_download(match DownloadConfiguration::new(config, output, args.threads) {
                 Ok(config) => config,
                 Err(e) => {
                     match e {
@@ -108,13 +99,10 @@ fn main() {
                 }
                 
             });
-            todo!("Download subcommand not implemented yet.");
         }
         Subs::GenerateConfig {
             output,
-            download_markscheme,
-            download_paper,
-            download_examiners_report,
+            papers,
             years,
             subjects,
             seasons,
@@ -123,9 +111,7 @@ fn main() {
             handle_generate(GenerationConfig::new(
                 output,
                 PaperGenerationConfig {
-                    download_markscheme,
-                    download_paper,
-                    download_examiners_report,
+                    papers,
                     years,
                     subjects,
                     seasons,

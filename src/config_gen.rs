@@ -1,14 +1,14 @@
 use std::{fs::File, io::Write, path::PathBuf, vec};
 
+use futures::StreamExt;
+
 use crate::{
-    configuration::{Configuration, Season, YearConfiguration, SYLLABUS_CODES},
-    scraper::get_all_years,
+    configuration::{Configuration, PaperType, RawPaper, Season, SyllabusCode, YearConfiguration, SYLLABUS_CODES},
+    scraper::{get_all_papers, get_all_years, PaperRequest},
 };
 #[derive(Debug)]
 pub struct PaperGenerationConfig {
-    pub download_markscheme: bool,
-    pub download_paper: bool,
-    pub download_examiners_report: bool,
+    pub papers: Vec<PaperType>,
     pub years: Option<Vec<String>>,
     pub subjects: Option<Vec<String>>,
     pub seasons: Option<Vec<Season>>,
@@ -48,9 +48,7 @@ pub fn handle_generate(mut config: GenerationConfig) {
 
     // Generate the configuration file
     let mut f_config = Configuration {
-        download_markscheme: config.paper_generation_config.download_markscheme,
-        download_paper: config.paper_generation_config.download_paper,
-        download_examiners_report: config.paper_generation_config.download_examiners_report,
+        papers: config.paper_generation_config.papers.clone(),
         subjects: vec![],
     };
 
@@ -60,54 +58,37 @@ pub fn handle_generate(mut config: GenerationConfig) {
         Season::Winter,
     ]);
 
-    f_config.subjects = match &config.paper_generation_config.subjects {
-        Some(subjects) => {
-            subjects
-                .iter()
-                .map(|subject| {
-                    // match subject with syllabus code
-                    let syllabus_code = &SYLLABUS_CODES.iter().find(|code| {
-                        code.name
-                            .to_lowercase()
-                            .starts_with(&subject.to_lowercase())
-                            || code.syllabus_code.to_lowercase() == subject.to_lowercase()
-                    });
-                    let syllabus_code = match syllabus_code {
-                        Some(code) => code,
-                        None => {
-                            error!("Subject {} not found in syllabus codes.", subject);
-                            std::process::exit(1);
-                        }
-                    };
-
-                    let years = match &config.paper_generation_config.years {
-                        Some(years) => years.clone(),
-                        None => vec![],
-                    };
-                    YearConfiguration {
-                        syllabus_code: (*syllabus_code).clone(),
-                        years,
-                        seasons: seasons.clone(),
+    let syllabus_codes: Vec<SyllabusCode> = config
+        .paper_generation_config
+        .subjects
+        .map(|x| {
+            x.iter()
+                .filter_map(|y| {
+                    let code = SYLLABUS_CODES
+                        .iter()
+                        .find(|&code| {
+                            code.name.to_lowercase().starts_with(&y.to_lowercase())
+                                || code
+                                    .syllabus_code
+                                    .to_lowercase()
+                                    .starts_with(&y.to_lowercase())
+                        })
+                        .cloned();
+                    if code.is_none() {
+                        error!("Invalid subject code: {}", y);
+                        std::process::exit(1);
                     }
+                    code
                 })
                 .collect()
-        }
-        None => SYLLABUS_CODES
-            .iter()
-            .map(|code| YearConfiguration {
-                syllabus_code: code.clone(),
-                years: vec![],
-                seasons: seasons.clone(),
-            })
-            .collect(),
-    };
+        })
+        .unwrap_or(SYLLABUS_CODES.clone());
 
-    // mapping through f_config.subjects and if years is empty, getting all years
-    // uses tokio runtime with multi-threaded executor
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(config.threads as usize)
         .enable_all()
         .build();
+
     let rt = match rt {
         Ok(rt) => rt,
         Err(e) => {
@@ -115,51 +96,78 @@ pub fn handle_generate(mut config: GenerationConfig) {
             std::process::exit(1);
         }
     };
-    let mut handles = vec![];
-    for subject in f_config.subjects {
-        let mut subject = subject.clone();
-        let handle: tokio::task::JoinHandle<YearConfiguration> = rt.spawn(async move {
-            if !subject.years.is_empty() {
-                return subject;
-            }
-            let years = get_all_years(&subject.syllabus_code).await;
-            let years = match years {
-                Ok(years) => {
-                    debug!("Got years for subject: {:?}", years);
-                    years
+
+    let raw_papers = syllabus_codes.iter().map(|x| RawPaper {
+        year: config
+            .paper_generation_config
+            .years
+            .clone()
+            .unwrap_or_default(),
+        syllabus_code: x.clone(),
+    });
+    let raw_papers = rt.block_on(async {
+        futures::stream::iter(raw_papers)
+            .map(|paper| async move {
+                if !paper.year.is_empty() {
+                    return Some(paper);
                 }
-                Err(e) => {
-                    error!(
-                        "Failed to get years for subject {}: {:?}",
-                        &subject.syllabus_code.name, e
-                    );
-                    vec![]
-                }
-            };
-            subject.years = years;
-            subject
-        });
-        handles.push(handle);
-    }
-    // wait for all handles to finish
-    let subjects: Vec<YearConfiguration> = rt.block_on(async {
-        let mut joint_future_handles: Vec<Result<YearConfiguration, tokio::task::JoinError>> =
-            futures::future::join_all(handles).await;
-        joint_future_handles
-            .iter_mut()
-            .filter(|handle| match handle {
-                Ok(a) => !a.years.is_empty(),
-                Err(e) => {
-                    error!("Failed to get years for subject: {}", e);
-                    false
+                let years = get_all_years(&paper.syllabus_code).await;
+                match years {
+                    Ok(years) => Some(RawPaper {
+                        year: years,
+                        syllabus_code: paper.syllabus_code,
+                    }),
+                    Err(e) => {
+                        error!(
+                            "Failed to fetch years for {}: {:?}",
+                            paper.syllabus_code.name, e
+                        );
+                        None
+                    }
                 }
             })
-            .map(|handle| handle.as_ref().unwrap().clone())
-            .collect()
+            .buffer_unordered(config.threads as usize)
+            .collect::<Vec<_>>()
+            .await
     });
+    let raw_papers = raw_papers.into_iter().flatten().collect::<Vec<_>>();
+    if raw_papers.is_empty() {
+        error!("No papers found.");
+        std::process::exit(1);
+    }
 
-    f_config.subjects = subjects;
+    let paper_request = raw_papers.iter().flat_map(|paper| {
+        paper.year.iter().map(|year| {
+            PaperRequest {
+                syllabus: paper.syllabus_code.clone(),
+                year: year.clone(),
+                seasons: seasons.clone(),
+                papers: config.paper_generation_config.papers.clone(),
+            }
+        })
+    }).collect::<Vec<_>>();
 
+    // async block
+    let papers = rt.block_on(async {
+        futures::stream::iter(paper_request)
+            .map(|request| async move {
+                let papers = get_all_papers(&request).await;
+                if papers.is_empty() {
+                    error!("No papers found for {:?}", request);
+                }
+                YearConfiguration {
+                    papers,
+                    syllabus_code: request.syllabus.clone()
+                }
+            })
+            .buffer_unordered(config.threads as usize)
+            .collect::<Vec<_>>()
+            .await
+    }).into_iter().collect::<Vec<_>>();
+    
+
+    f_config.subjects = papers;
+    
     let toml_config = toml::to_string(&f_config).unwrap();
 
     // as_bytes() is cheap.
