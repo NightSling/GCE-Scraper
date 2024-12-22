@@ -1,4 +1,4 @@
-use std::{fs::File, path::PathBuf, sync::Arc};
+use std::{fs::File, path::PathBuf};
 
 use futures::{stream, StreamExt};
 use par_stream::ParStreamExt;

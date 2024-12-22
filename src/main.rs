@@ -6,7 +6,7 @@ use log::debug;
 
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(version, about="A GCE-Guide Scraper. Download all the A-Levels Past Papers in bulk!", author = "Sushant Pangeni, contact@daysling.com")]
 struct Args {
     #[command(flatten)]
     verbose: clap_verbosity_flag::Verbosity,
