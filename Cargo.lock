@@ -489,6 +489,7 @@ dependencies = [
  "kuchikiki",
  "log",
  "pretty_env_logger",
+ "regex",
  "reqwest",
  "serde",
  "tokio",

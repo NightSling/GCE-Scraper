@@ -1,29 +1,30 @@
 use std::{fs::File, io::Write, path::PathBuf, vec};
 
 use crate::{
-    configuration::{Configuration, YearConfiguration, SYLLABUS_CODES},
+    configuration::{Configuration, Season, YearConfiguration, SYLLABUS_CODES},
     scraper::get_all_years,
 };
+#[derive(Debug)]
+pub struct PaperGenerationConfig {
+    pub download_markscheme: bool,
+    pub download_paper: bool,
+    pub download_examiners_report: bool,
+    pub years: Option<Vec<String>>,
+    pub subjects: Option<Vec<String>>,
+    pub seasons: Option<Vec<Season>>,
+}
 
 #[derive(Debug)]
 pub struct GenerationConfig {
     output: File,
-    download_markscheme: bool,
-    download_paper: bool,
-    download_examiners_report: bool,
-    years: Option<Vec<String>>,
-    subjects: Option<Vec<String>>,
+    paper_generation_config: PaperGenerationConfig,
     threads: u8,
 }
 
 impl GenerationConfig {
     pub fn new(
         output: PathBuf,
-        download_markscheme: bool,
-        download_paper: bool,
-        download_examiners_report: bool,
-        years: Option<Vec<String>>,
-        subjects: Option<Vec<String>>,
+        paper_generation_config: PaperGenerationConfig,
         threads: u8,
     ) -> Self {
         let output = match File::create(output) {
@@ -35,11 +36,7 @@ impl GenerationConfig {
         };
         Self {
             output,
-            download_markscheme,
-            download_paper,
-            download_examiners_report,
-            years,
-            subjects,
+            paper_generation_config,
             threads,
         }
     }
@@ -51,13 +48,19 @@ pub fn handle_generate(mut config: GenerationConfig) {
 
     // Generate the configuration file
     let mut f_config = Configuration {
-        download_markscheme: config.download_markscheme,
-        download_paper: config.download_paper,
-        download_examiners_report: config.download_examiners_report,
+        download_markscheme: config.paper_generation_config.download_markscheme,
+        download_paper: config.paper_generation_config.download_paper,
+        download_examiners_report: config.paper_generation_config.download_examiners_report,
         subjects: vec![],
     };
 
-    f_config.subjects = match &config.subjects {
+    let seasons = config.paper_generation_config.seasons.unwrap_or(vec![
+        Season::March,
+        Season::Summer,
+        Season::Winter,
+    ]);
+
+    f_config.subjects = match &config.paper_generation_config.subjects {
         Some(subjects) => {
             subjects
                 .iter()
@@ -77,13 +80,14 @@ pub fn handle_generate(mut config: GenerationConfig) {
                         }
                     };
 
-                    let years = match &config.years {
+                    let years = match &config.paper_generation_config.years {
                         Some(years) => years.clone(),
                         None => vec![],
                     };
                     YearConfiguration {
                         syllabus_code: (*syllabus_code).clone(),
                         years,
+                        seasons: seasons.clone(),
                     }
                 })
                 .collect()
@@ -93,6 +97,7 @@ pub fn handle_generate(mut config: GenerationConfig) {
             .map(|code| YearConfiguration {
                 syllabus_code: code.clone(),
                 years: vec![],
+                seasons: seasons.clone(),
             })
             .collect(),
     };
@@ -112,38 +117,45 @@ pub fn handle_generate(mut config: GenerationConfig) {
     };
     let mut handles = vec![];
     for subject in f_config.subjects {
-        if subject.years.is_empty() {
-            let mut subject = subject.clone();
-            let handle: tokio::task::JoinHandle<YearConfiguration> = rt.spawn(async move {
-                let years = get_all_years(&subject.syllabus_code).await;
-                let years = match years {
-                    Ok(years) => {
-                        debug!("Got years for subject: {:?}", years);
-                        years
-                    }
-                    Err(e) => {
-                        error!("Failed to get years for subject {}: {:?}", &subject.syllabus_code.name, e);
-                        vec![]
-                    }
-                };
-                subject.years = years;
-                subject
-            });
-            handles.push(handle);
-        }
+        let mut subject = subject.clone();
+        let handle: tokio::task::JoinHandle<YearConfiguration> = rt.spawn(async move {
+            if !subject.years.is_empty() {
+                return subject;
+            }
+            let years = get_all_years(&subject.syllabus_code).await;
+            let years = match years {
+                Ok(years) => {
+                    debug!("Got years for subject: {:?}", years);
+                    years
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to get years for subject {}: {:?}",
+                        &subject.syllabus_code.name, e
+                    );
+                    vec![]
+                }
+            };
+            subject.years = years;
+            subject
+        });
+        handles.push(handle);
     }
     // wait for all handles to finish
     let subjects: Vec<YearConfiguration> = rt.block_on(async {
-        let mut joint_future_handles: Vec<Result<YearConfiguration, tokio::task::JoinError>> =  futures::future::join_all(handles).await;
-        joint_future_handles.iter_mut().filter(|handle| 
-            match handle {
+        let mut joint_future_handles: Vec<Result<YearConfiguration, tokio::task::JoinError>> =
+            futures::future::join_all(handles).await;
+        joint_future_handles
+            .iter_mut()
+            .filter(|handle| match handle {
                 Ok(a) => !a.years.is_empty(),
                 Err(e) => {
                     error!("Failed to get years for subject: {}", e);
                     false
                 }
-            }
-        ).map(|handle| handle.as_ref().unwrap().clone()).collect()
+            })
+            .map(|handle| handle.as_ref().unwrap().clone())
+            .collect()
     });
 
     f_config.subjects = subjects;

@@ -1,5 +1,6 @@
-use std::sync::LazyLock;
+use std::{fs::File, io::Read, str::FromStr, sync::LazyLock};
 
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,10 +11,78 @@ pub struct Configuration {
     pub subjects: Vec<YearConfiguration>,
 }
 
+impl TryFrom<File> for Configuration {
+    type Error = std::io::Error;
+    // parses a configuration file into a Configuration struct, TOML format
+    fn try_from(value: File) -> Result<Self, Self::Error> {
+        let mut buff = std::io::BufReader::new(value);
+        // let buff_lines= std::io::BufRead::lines(buff);
+        let mut conf_str: Vec<u8> = Vec::new();
+        buff.read_to_end(&mut conf_str).unwrap();
+        let config = toml::from_str(
+            std::str::from_utf8(&conf_str).unwrap(),
+        );
+        let config = match config {
+            Ok(config) => config,
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Failed to parse configuration file.",
+                ))
+            }
+        };
+        Ok(config)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct YearConfiguration {
     pub syllabus_code: SyllabusCode,
     pub years: Vec<String>,
+    pub seasons: Vec<Season>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum Season {
+    Winter, // Refered to as "w"
+    Summer, // Refered to as "s"
+    March, // Refered to as "m"
+}
+
+#[derive(Debug, Clone)]
+pub enum SeasonParseError {
+    InvalidSeasonCharacter,
+    RegexNoMatch
+}
+
+impl FromStr for Season {
+    type Err = SeasonParseError;
+
+    fn from_str(season: &str) -> Result<Self, Self::Err> {
+        // Matches with regex, $(SYLLABUS_CODE)_([wsm][0-9]{2})_[ms|qp|er].+^
+        let matcher = regex::Regex::new(r"([wsm][0-9]{2})").unwrap();
+        let captures = matcher.captures(season);
+        match captures {
+            Some(captures) => {
+                let season = match captures.get(1) {
+                    Some(season) => season.as_str(),
+                    None => {
+                        debug!("Failed parsing season from: {}", season);
+                        return Err(
+                            SeasonParseError::RegexNoMatch
+                        )
+                    }
+                };
+                match season.chars().next().unwrap() {
+                    'w' => Ok(Season::Winter),
+                    's' => Ok(Season::Summer),
+                    'm' => Ok(Season::March),
+                    _ => Err(SeasonParseError::InvalidSeasonCharacter),
+                }
+            }
+            None => Err(SeasonParseError::RegexNoMatch),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

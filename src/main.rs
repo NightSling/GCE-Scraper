@@ -1,15 +1,9 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use config_gen::{handle_generate, GenerationConfig};
+use gce_scraper::{config_gen::{handle_generate, GenerationConfig, PaperGenerationConfig}, configuration::Season, download::{handle_download, DownloadConfiguration}};
+use log::debug;
 
-pub mod config_gen;
-pub mod configuration;
-pub mod scraper;
-
-extern crate pretty_env_logger;
-#[macro_use]
-extern crate log;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -50,13 +44,15 @@ enum Subs {
         #[arg(short, long, value_name = "years")]
         years: Option<Vec<String>>,
         #[arg(short, long, value_name = "subjects")]
-        subjects: Option<Vec<String>>
+        subjects: Option<Vec<String>>,
+        #[arg(long, value_name = "seasons", default_value = "winter, summer")]
+        seasons: Option<Vec<Season>>
     },
 
     #[command(about = "Download the files specified in the configuration file.")]
     Download {
         #[arg(short, long, value_name = "config", default_value = "config.toml")]
-        config: String,
+        config: PathBuf,
         #[arg(
             short,
             long,
@@ -90,10 +86,28 @@ fn main() {
     // Handle subcommands
     match args.generate {
         Subs::Download {
-            config: _,
-            output: _ ,
+            config,
+            output,
         } => {
             debug!("Selected Download subcommand.");
+            handle_download(match DownloadConfiguration::new(config, output) {
+                Ok(config) => config,
+                Err(e) => {
+                    match e {
+                        gce_scraper::download::DownloadError::ConfigNotFound => {
+                            log::error!("Configuration file not found.");
+                        },
+                        gce_scraper::download::DownloadError::DownloadFolderCannotBeCreated => {
+                            log::error!("Output folder cannot be created.");
+                        },
+                        gce_scraper::download::DownloadError::ConfigParseError(e) => {
+                            log::error!("Error parsing configuration file: {}", e);
+                        }
+                    }
+                    std::process::exit(1);
+                }
+                
+            });
             todo!("Download subcommand not implemented yet.");
         }
         Subs::GenerateConfig {
@@ -103,15 +117,19 @@ fn main() {
             download_examiners_report,
             years,
             subjects,
+            seasons,
         } => {
             debug!("Selected GenerateConfig subcommand.");
             handle_generate(GenerationConfig::new(
                 output,
-                download_markscheme,
-                download_paper,
-                download_examiners_report,
-                years,
-                subjects,
+                PaperGenerationConfig {
+                    download_markscheme,
+                    download_paper,
+                    download_examiners_report,
+                    years,
+                    subjects,
+                    seasons,
+                },
                 args.threads,
             ));
         }

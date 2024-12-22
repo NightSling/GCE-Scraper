@@ -538,3 +538,4 @@ FodyWeavers.xsd
 # End of https://www.toptal.com/developers/gitignore/api/visualstudio,rust,rust-analyzer,intellij
 Config.toml
 config.toml
+Past Papers/
