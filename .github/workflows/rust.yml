@@ -38,32 +38,8 @@ jobs:
 
     - name: Run tests
       run: cargo test --verbose --target ${{ matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}
-
-  upload-artifact:
-    runs-on: ubuntu-latest  # Use Ubuntu to upload the artifacts (could also be Windows if preferred)
-    needs: build  # Ensures this job runs after the build job
-    steps:
-    - uses: actions/checkout@v4
-
-    # Upload Linux Artifacts
-    - name: Upload Linux Artifacts
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        find target/
-        mkdir -p build/linux
-        cp -r target/x86_64-unknown-linux-gnu/release/* build/linux/
-
-    # Upload Windows Artifacts
-    - name: Upload Windows Artifacts
-      if: matrix.os == 'windows-latest'
-      run: |
-        find target/
-        mkdir -p build/windows
-        cp -r target/x86_64-pc-windows-msvc/release/* build/windows/
-
-    # Upload the artifacts
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+    - name: Upload
+      uses: actions/upload-artifact@v4
       with:
-        name: rust-build-artifacts
-        path: build/
+        name: binary-${{ matrix.os }}-${{ matrix.version }}
+        path: target/${{ matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}/release/*
