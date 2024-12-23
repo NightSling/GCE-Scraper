@@ -5,6 +5,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:  # Makes the workflow manually triggable
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,11 +13,36 @@ env:
 jobs:
   build:
 
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]  # Matrix to build for both Ubuntu and Windows
+
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v4
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --verbose --target ${{ matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose --target ${{ matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}
+
+  upload-artifact:
+    runs-on: ubuntu-latest  # Use Ubuntu to upload the artifacts (could also be Windows if preferred)
+    needs: build  # Ensures this job runs after the build job
+    steps:
+    - uses: actions/checkout@v4
+    - name: Upload Linux Artifacts
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        mkdir -p build/linux
+        cp target/x86_64-unknown-linux-gnu/release/* build/linux/
+    - name: Upload Windows Artifacts
+      if: matrix.os == 'windows-latest'
+      run: |
+        mkdir -p build/windows
+        cp target/x86_64-pc-windows-msvc/release/* build/windows/
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: rust-build-artifacts
+        path: build/
