@@ -49,6 +49,7 @@ jobs:
     - name: Upload Linux Artifacts
       if: matrix.os == 'ubuntu-latest'
       run: |
+        find target/
         mkdir -p build/linux
         cp -r target/x86_64-unknown-linux-gnu/release/* build/linux/
 
@@ -56,6 +57,7 @@ jobs:
     - name: Upload Windows Artifacts
       if: matrix.os == 'windows-latest'
       run: |
+        find target/
         mkdir -p build/windows
         cp -r target/x86_64-pc-windows-msvc/release/* build/windows/
 
