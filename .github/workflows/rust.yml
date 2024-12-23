@@ -12,7 +12,6 @@ env:
 
 jobs:
   build:
-
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]  # Matrix to build for both Ubuntu and Windows
@@ -21,8 +20,22 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    # Restore the build cache to speed up the build process
+    - name: Cache Cargo registry and build
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
     - name: Build
-      run: cargo build --verbose --target ${{ matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}
+      run: cargo build --release --verbose --target ${{ matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}
+
     - name: Run tests
       run: cargo test --verbose --target ${{ matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}
 
@@ -31,16 +44,22 @@ jobs:
     needs: build  # Ensures this job runs after the build job
     steps:
     - uses: actions/checkout@v4
+
+    # Upload Linux Artifacts
     - name: Upload Linux Artifacts
       if: matrix.os == 'ubuntu-latest'
       run: |
         mkdir -p build/linux
-        cp target/x86_64-unknown-linux-gnu/release/* build/linux/
+        cp -r target/x86_64-unknown-linux-gnu/release/* build/linux/
+
+    # Upload Windows Artifacts
     - name: Upload Windows Artifacts
       if: matrix.os == 'windows-latest'
       run: |
         mkdir -p build/windows
-        cp target/x86_64-pc-windows-msvc/release/* build/windows/
+        cp -r target/x86_64-pc-windows-msvc/release/* build/windows/
+
+    # Upload the artifacts
     - name: Upload Artifact
       uses: actions/upload-artifact@v3
       with:
